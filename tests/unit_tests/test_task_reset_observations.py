@@ -97,13 +97,15 @@ def test_runner_observations_include_current_gait_phase_and_frequency(task):
             (torch.sin(env.phase), torch.cos(env.phase), env.phase_frequency),
             dim=-1,
         )
-        for names, size in (
-            (runner_cfg.actor.obs, 48),
-            (runner_cfg.critic.obs, 52),
+        for names, size, phase_start in (
+            (runner_cfg.actor.obs, 50, 45), # was 48 for size
+            (runner_cfg.critic.obs, 53, 49), # was 52 for size
         ):
             observation = env.get_states(names)
             assert observation.shape == (env.num_envs, size)
-            torch.testing.assert_close(observation[:, -3:], expected)
+            torch.testing.assert_close(
+                observation[:, phase_start : phase_start + 3],
+                expected)
         env.step()
 
 

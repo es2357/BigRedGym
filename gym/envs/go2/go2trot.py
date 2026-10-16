@@ -13,6 +13,14 @@ class Go2Trot(LeggedRobot):
     def _init_buffers(self):
         super()._init_buffers()
 
+        # (4096, 1) : one height per robot
+        self.height_command = torch.full(
+            (self.num_envs, 1), 
+            self.cfg.height_control.default_height,
+            dtype=torch.float,
+            device=self.device
+        )
+
         self._actuated_dof_pos_limits = self.dof_pos_limits.index_select(
             0, self.actuated_dof_indices
         )
@@ -118,6 +126,23 @@ class Go2Trot(LeggedRobot):
             )
             self.commands.masked_fill_(drop, 0.0)
 
+        cfg = self.cfg.height_control
+
+        heights = torch_rand_float(
+            cfg.min_height,
+            cfg.max_height,
+            self.height_command.shape,
+            self.device,
+        )
+        masked_update(self.height_command, heights, command_mask)
+
+        # make robot stay in place
+        stationary = command_mask & (
+            torch.rand(self.num_envs, device=self.device)
+            < cfg.stationary_fraction
+        )
+        self.commands.masked_fill_(stationary.unsqueeze(1), 0.0)
+
     def _reset_idx(self, reset_mask):
         super()._reset_idx(reset_mask)
         self.dof_pos_target.masked_fill_(reset_mask.unsqueeze(1), 0.0)
@@ -168,19 +193,22 @@ class Go2Trot(LeggedRobot):
             2.0 * torch.sqrt(torch.prod(stance_strength, dim=1)),
             max=1.0,
         )
-        return torch.relu(phase).amax(dim=1) * paired_support
+        reward = torch.relu(phase).amax(dim=1) * paired_support
+        return reward * (~self._stationary_mask()).float()
 
     def _reward_swing_contact(self):
         """Penalize load carried by feet during their scheduled swing phase."""
         phase = torch.sin(self._leg_phases())
-        return -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+        reward = -torch.mean(torch.relu(-phase) * self._foot_contact_strength(), dim=1)
+        return reward * (~self._stationary_mask()).float()
 
     def _reward_reference_traj(self):
         pos = self.dof_pos.index_select(1, self.actuated_dof_indices)
         default_pos = self.default_dof_pos.index_select(1, self.actuated_dof_indices)
         scale = self.scales["dof_pos"].index_select(0, self.actuated_dof_indices)
         error = (self.gait_reference + default_pos - pos) / scale
-        return (self._sqrdexp(error) - 0.2 * error.abs()).mean(dim=1)
+        reward = (self._sqrdexp(error) - 0.2 * error.abs()).mean(dim=1)
+        return reward * (~self._stationary_mask()).float()
 
     def _reward_lin_vel_z(self):
         """Penalize z axis base linear velocity with squared exp"""
@@ -231,3 +259,16 @@ class Go2Trot(LeggedRobot):
             ),
             dim=1,
         )
+    def _stationary_mask(self):
+        return (torch.linalg.vector_norm(self.commands[:, :2], dim=1) < 0.05) & (self.commands[:, 2].abs() < 0.05)
+
+    # penalize incorrect height
+    def _reward_tracking_height(self):
+        error = (self.base_height - self.height_command).squeeze(1)
+        return -error.abs() / self.cfg.height_control.tracking_sigma
+
+    def _reward_stand_still(self):
+        joint_motion = (self.dof_vel / self.scales["dof_vel"]).square().mean(dim=1)
+        linear_motion = (self.base_lin_vel / self.scales["base_lin_vel"]).square().sum(dim=1)
+        angular_motion = (self.base_ang_vel / self.scales["base_ang_vel"]).square().sum(dim=1)
+        return -self._stationary_mask().float() * (joint_motion + linear_motion + angular_motion)
