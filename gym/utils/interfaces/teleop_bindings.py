@@ -80,9 +80,14 @@ class TeleopCommands:
         self.increment_yaw = self.max_vel_yaw * 0.2
 
         env.commands[:] = 0.0
-        env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
+        # env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
+        if hasattr(env, "height_command"):
+            env.height_command.fill_(
+                env.cfg.height_control.default_height
+            )
         if hasattr(env.cfg, "commands"):
-            env.cfg.commands.resampling_time = env.max_episode_length_s + 1
+            # env.cfg.commands.resampling_time = env.max_episode_length_s + 1
+            env.cfg.commands.resampling_time = 1e9
 
     def apply(self, action: str) -> None:
         """Apply one discrete press of ``action`` (see BINDINGS)."""
@@ -101,9 +106,30 @@ class TeleopCommands:
             c[:, 2] = torch.clamp(c[:, 2] + self.increment_yaw, max=self.max_vel_yaw)
         elif action == "yaw_right":
             c[:, 2] = torch.clamp(c[:, 2] - self.increment_yaw, min=-self.max_vel_yaw)
+        elif action in ("up", "down"):
+            if not hasattr(self.env, "height_command"):
+                return
+
+            cfg = self.env.cfg.height_control
+            delta = cfg.step if action == "up" else -cfg.step
+
+            self.env.height_command.add_(delta).clamp_(
+                min=cfg.min_height,
+                max=cfg.max_height,
+            )
+
+            print(
+                f"Height target: "
+                f"{self.env.height_command[0, 0].item():.2f} m"
+            )
         elif action == "reset":
             self.env.timed_out[:] = True
             self.env.reset()
+            if hasattr(self.env, "height_command"):
+                self.env.commands.zero_()
+                self.env.height_command.fill_(
+                    self.env.cfg.height_control.default_height
+                )
         else:
             raise ValueError(f"unknown teleop action {action!r}")
 
