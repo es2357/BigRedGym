@@ -131,7 +131,7 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
             "phase_obs",
             "phase_frequency",
             "base_height",
-            "height_command"
+            "height_command",
         ]
         normalize_obs = False
         smooth_exploration = False
@@ -178,7 +178,7 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 torques = 5.0e-6
                 dof_vel = 0.0
                 # stand_still = 0.0 # original
-                stand_still = 0.01 
+                stand_still = 0.01
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
                 dof_near_home = 0.0

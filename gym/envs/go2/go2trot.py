@@ -15,10 +15,10 @@ class Go2Trot(LeggedRobot):
 
         # (4096, 1) : one height per robot
         self.height_command = torch.full(
-            (self.num_envs, 1), 
+            (self.num_envs, 1),
             self.cfg.height_control.default_height,
             dtype=torch.float,
-            device=self.device
+            device=self.device,
         )
 
         self._actuated_dof_pos_limits = self.dof_pos_limits.index_select(
@@ -138,8 +138,7 @@ class Go2Trot(LeggedRobot):
 
         # make robot stay in place
         stationary = command_mask & (
-            torch.rand(self.num_envs, device=self.device)
-            < cfg.stationary_fraction
+            torch.rand(self.num_envs, device=self.device) < cfg.stationary_fraction
         )
         self.commands.masked_fill_(stationary.unsqueeze(1), 0.0)
 
@@ -259,8 +258,11 @@ class Go2Trot(LeggedRobot):
             ),
             dim=1,
         )
+
     def _stationary_mask(self):
-        return (torch.linalg.vector_norm(self.commands[:, :2], dim=1) < 0.05) & (self.commands[:, 2].abs() < 0.05)
+        return (torch.linalg.vector_norm(self.commands[:, :2], dim=1) < 0.05) & (
+            self.commands[:, 2].abs() < 0.05
+        )
 
     # penalize incorrect height
     def _reward_tracking_height(self):
@@ -269,6 +271,12 @@ class Go2Trot(LeggedRobot):
 
     def _reward_stand_still(self):
         joint_motion = (self.dof_vel / self.scales["dof_vel"]).square().mean(dim=1)
-        linear_motion = (self.base_lin_vel / self.scales["base_lin_vel"]).square().sum(dim=1)
-        angular_motion = (self.base_ang_vel / self.scales["base_ang_vel"]).square().sum(dim=1)
-        return -self._stationary_mask().float() * (joint_motion + linear_motion + angular_motion)
+        linear_motion = (
+            (self.base_lin_vel / self.scales["base_lin_vel"]).square().sum(dim=1)
+        )
+        angular_motion = (
+            (self.base_ang_vel / self.scales["base_ang_vel"]).square().sum(dim=1)
+        )
+        return -self._stationary_mask().float() * (
+            joint_motion + linear_motion + angular_motion
+        )
