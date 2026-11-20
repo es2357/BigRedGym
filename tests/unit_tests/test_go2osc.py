@@ -164,7 +164,7 @@ def test_grf_uses_vector_norm_clipping_and_live_per_environment_mass(env):
 
 
 def test_paper_leg_order_aligns_named_forces_phase_feedback_and_observations(env):
-    assert env.LEG_NAMES == ("RF", "LF", "RH", "LH")
+    assert env.LEG_NAMES == ("FR", "FL", "RR", "RL")
     native_feet = tuple(
         env.robot_layout.body_names[index] for index in env.feet_indices.tolist()
     )

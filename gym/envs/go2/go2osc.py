@@ -1,5 +1,4 @@
 import math
-
 import torch
 
 from gym.envs.go2.go2 import Go2
@@ -7,58 +6,43 @@ from gym.utils.sampling import masked_update
 
 
 class Go2Osc(Go2):
-    """ORC(111) oscillator dynamics and phase rewards for Go2.
+    """ORC(111) oscillator dynamics and phase rewards for Go2
 
-    ``cfg.osc`` supplies the reference command-schedule and noise parameters.
-    Phases reset independently; rewards use continuous phases and foot forces.
-    Forward commands are discrete centers plus ``cfg.commands.var`` noise.
-    Leg-indexed oscillator buffers use the paper order: RF, LF, RH, LH.
+        for mental sanity: 
+            paper leg naming convention vs code (from URDF): 
+            "RF" = "FR", "LF" = "FL", "RH" = "RR", "LH" = "RL"
+
+        comments : translate code to math in paper 
     """
 
-    LEG_NAMES = ("RF", "LF", "RH", "LH")
-    _ASSET_LEG_PREFIXES = {"RF": "FR", "LF": "FL", "RH": "RR", "LH": "RL"}
+    # inherited order from LeggedRobot
+    LEG_NAMES = ("FL", "FR", "RL", "RR")
 
     def _init_buffers(self):
         super()._init_buffers()
-        if self.feet_indices.numel() != 4:
-            raise ValueError("Go2Osc requires exactly four feet in the robot layout")
+        
+        self._gravity_magnitude = 9.81  # m/s^2
 
-        gravity = getattr(getattr(self.cfg, "sim", None), "gravity", (0, 0, -9.81))
-        self._gravity_magnitude = math.hypot(*gravity)
-        if (
-            self.cfg.asset.disable_gravity
-            or not math.isfinite(self._gravity_magnitude)
-            or self._gravity_magnitude <= 0
-        ):
-            raise ValueError("Go2Osc requires nonzero gravity to normalize GRFs")
-
-        # Resolve the paper's leg labels to Go2 asset bodies and joints.
-        leg_prefixes = [self._ASSET_LEG_PREFIXES[leg] for leg in self.LEG_NAMES]
-        foot_names = [f"{prefix}_foot" for prefix in leg_prefixes]
-        self._oscillator_feet_indices = torch.tensor(
-            self.robot_layout.body_indices(foot_names),
-            device=self.device,
-            dtype=torch.long,
-        )
+        # phi : each leg's phase angle [rad]
         self.oscillators = torch.zeros(self.num_envs, 4, device=self.device)
+        # phi dot [rad/s]
         self.oscillators_vel = torch.zeros_like(self.oscillators)
+        # cos(phi) and sin(phi) for each of four legs 
         self.oscillator_obs = torch.zeros(self.num_envs, 8, device=self.device)
         self.grf = torch.zeros_like(self.oscillators)
+        # nominal frequency [Hz]
         self.osc_omega = torch.full(
             (self.num_envs, 1),
             self.cfg.osc.omega_stop,
             device=self.device,
             dtype=self.oscillators.dtype,
         )
+        # sigma -- strength of force feedback
         self.osc_coupling = torch.full_like(self.osc_omega, self.cfg.osc.coupling_stop)
+        # xi -- offset in feedback term
         self.osc_offset = torch.full_like(self.osc_omega, self.cfg.osc.offset)
-        command_centers = torch.tensor(
-            self.command_ranges["lin_vel_x"], device=self.device, dtype=torch.float
-        )
-        if command_centers.ndim != 1 or command_centers.numel() == 0:
-            raise ValueError("Forward command centers must be a nonempty sequence")
 
-        hip_names = [f"{prefix}_hip_joint" for prefix in leg_prefixes]
+        hip_names = [f"{leg}_hip_joint" for leg in self.LEG_NAMES]
         self._hip_indices = torch.tensor(
             self.robot_layout.dof_indices(hip_names),
             device=self.device,
@@ -66,11 +50,12 @@ class Go2Osc(Go2):
         )
         self._update_oscillator_observations()
 
+
     def _reset_idx(self, reset_mask):
         if not reset_mask.any():
             return
         super()._reset_idx(reset_mask)
-        # The PD controller adds the nominal pose to these position offsets.
+        # The PD controller adds the nominal pose to these position offsets
         self.dof_pos_target.masked_fill_(reset_mask.unsqueeze(1), 0.0)
         self.dof_pos_history.masked_fill_(reset_mask.unsqueeze(1), 0.0)
 
@@ -81,14 +66,14 @@ class Go2Osc(Go2):
     def _reset_oscillators(self, reset_mask):
         phases = torch.rand_like(self.oscillators) * (2 * math.pi)
         masked_update(self.oscillators, phases, reset_mask)
-        # Reset contacts may be stale until the backend takes a physics step.
+        # Reset contacts may be stale until the backend takes a physics step
         self.grf.masked_fill_(reset_mask.unsqueeze(1), 0.0)
         masked_update(self.oscillators_vel, self._compute_phase_velocity(), reset_mask)
         self._update_oscillator_observations(reset_mask)
 
     def _compute_grf(self, grf_norm=True):
         """Return RF, LF, RH, LH force magnitudes, optionally divided by weight."""
-        forces = self.contact_forces.index_select(1, self._oscillator_feet_indices)
+        forces = self.contact_forces[:, self.feet_indices, :]
         magnitudes = torch.linalg.vector_norm(forces, dim=-1)
         if not grf_norm:
             return magnitudes
