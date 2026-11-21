@@ -35,8 +35,8 @@ class Go2TrotCfg(Go2Cfg):
         ]
 
     class control(Go2Cfg.control):
-        stiffness = {"hip": 20.0, "thigh": 20.0, "calf": 20.0}
-        damping = {"hip": 0.5, "thigh": 0.5, "calf": 0.5}
+        stiffness = {"hip": 30.0, "thigh": 30.0, "calf": 30.0}
+        damping = {"hip": 1.5, "thigh": 1.5, "calf": 1.5}
         ctrl_frequency = 50
         desired_sim_frequency = 300  # pre-emptively changed from 50 to deal with higher damping values
         gait_freq = [1.0, 3.0]  # oscillator frequency range [Hz]

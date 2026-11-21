@@ -4,6 +4,7 @@
 import argparse
 import random
 import sys
+import time
 
 import torch
 import matplotlib.pyplot as plt
@@ -136,6 +137,7 @@ def play(env, runner):
     n_steps = 10 * int(env.max_episode_length)
     # Capture the starting positions of the envs
     start_root_states = env.root_states[:,:2].clone()
+    sum_tracking_reward = torch.zeros_like(env.root_states[:,0])
     for step in range(n_steps):
         runner.set_actions(
             runner.actor_cfg["actions"],
@@ -143,13 +145,20 @@ def play(env, runner):
             runner.actor_cfg["disable_actions"],
         )
         env.step()
+        sum_tracking_reward += env._reward_tracking_lin_vel()
         if env.exit:
             break
     # Record the distance traveled and whether the robot is upright
     # Need to offset for initial position (not always 0,0,0)
     displacement = torch.sum(env.commands[:,:2] * (env.root_states[:,:2] - start_root_states), axis=1)  # num envs x 2 --> root planar position 2-vectors
     upright = torch.sum(env.gravity_vec * env.projected_gravity, axis=1)  # 1 if upright, 0 if sideways, -1 if flipped
-    return displacement, upright
+    return displacement, upright, sum_tracking_reward
+
+
+def format_seconds_to_hms(secs):
+    minutes, seconds = divmod(int(secs), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:d}:{minutes:02d}:{seconds:02d}"
 
 
 if __name__ == "__main__":
@@ -175,52 +184,80 @@ if __name__ == "__main__":
 
     print("Beginning sweep...")
     # Namespace(task='go2trot', device='cpu', num_envs=1, seed=None, experiment_name=None, load_run=None, checkpoint=-1, original_cfg=False, headless=False, backend='mujoco', viewer_ui=False, keyboard=True)
-    displacements = torch.zeros((stiffness.size()[0], damping.size()[0]))
-    uprights = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    displacement_means = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    displacement_stds = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    upright_means = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    upright_stds = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    sum_forward_reward_means = torch.zeros((stiffness.size()[0], damping.size()[0]))
+    sum_forward_reward_stds = torch.zeros((stiffness.size()[0], damping.size()[0]))
     with torch.no_grad():
         env, runner = setup(args)
         # Save the original stiffness and damping values to plot
         # This assumes that stiffness and damping is uniform across all joints
-        orig_stiffness = env.cfg.control.stiffness["hip"]
-        orig_damping = env.cfg.control.damping["hip"]
+        orig_stiffness = list(env.cfg.control.stiffness.values())[0]
+        orig_damping = list(env.cfg.control.damping.values())[0]
+        # Starting the start time way before the sweep causes a big offset error
+        # So we will start it immediately before
+        start_time = time.time()
         for p_idx in range(stiffness.size()[0]):
             for d_idx in range(damping.size()[0]):
-                print(f"Percent: {100 * (p_idx * damping.size()[0] + d_idx) / (stiffness.size()[0] * damping.size()[0]) :.1f}% (Testing k={stiffness[p_idx]}, b={damping[d_idx]})")
+                now_time = time.time()
+                percent_complete = (p_idx * damping.size()[0] + d_idx) / (stiffness.size()[0] * damping.size()[0])
+                if percent_complete != 0:
+                    print(f"Percent: {100 * percent_complete :.1f}% (Testing k={stiffness[p_idx]}, b={damping[d_idx]}); Elapsed: {format_seconds_to_hms(now_time - start_time)}; Estimated time remaining: {format_seconds_to_hms((now_time - start_time) / percent_complete - (now_time - start_time))} (Estimated total {format_seconds_to_hms((now_time - start_time) / percent_complete)})")
                 env.reset()
                 # Start with forward command
                 env.commands[:] = 0.0
-                env.commands[:, 0] = 1.0
+                env.commands[:, 0] = 1.5  # mid-range command value
                 # Reset the stiffness and damping
-                env.cfg.control.stiffness = {"hip": stiffness[p_idx], "thigh": stiffness[p_idx], "calf": stiffness[p_idx]}
-                env.cfg.control.damping = {"hip": damping[d_idx], "thigh": damping[d_idx], "calf": damping[d_idx]}
+                # Referencing the keys of the dicts allows this to work for any robot
+                for key in env.cfg.control.stiffness.keys():
+                    env.cfg.control.stiffness[key] = stiffness[p_idx]
+                    env.cfg.control.damping[key] = damping[d_idx]
                 reset_gains(env)
-                displacement, upright = play(env, runner)
-                displacements[p_idx, d_idx] = torch.mean(displacement)
-                uprights[p_idx, d_idx] = torch.mean(upright)
+
+                displacement, upright, sum_forward_reward = play(env, runner)
+                displacement_means[p_idx, d_idx] = torch.mean(displacement)
+                displacement_stds[p_idx, d_idx] = torch.std(displacement)
+                upright_means[p_idx, d_idx] = torch.mean(upright)
+                upright_stds[p_idx, d_idx] = torch.std(upright)
+                sum_forward_reward_means[p_idx, d_idx] = torch.mean(sum_forward_reward)
+                sum_forward_reward_stds[p_idx, d_idx] = torch.std(sum_forward_reward)
+
+    class DatasetPackage:
+        def __init__(self, data, title, cmap_label, cmap_cmap, filename):
+            self.data = data
+            self.title = title
+            self.cmap_label = cmap_label
+            self.cmap_cmap = cmap_cmap
+            self.filename = filename
+
+    # Package up the data and some descriptions
+    datasets = [
+        DatasetPackage(displacement_means, "Displacement products means", "Bigger positive = displacement matches commands", "viridis", "displacement_mean.png"),
+        DatasetPackage(displacement_stds, "Displacement product stds", "Bigger value = more variation", "viridis", "displacement_std.png"),
+        DatasetPackage(upright_means, "Upright products means", "1 = upright, 0 = sideways, -1 = upside-down", "magma", "upright_mean.png"),
+        DatasetPackage(upright_stds, "Upright products stds", "Bigger value = more variation", "magma", "upright_std.png"),
+        DatasetPackage(sum_forward_reward_means, "Sum of forward rewards means", "Bigger positive = forward velocity tracked better", "cividis", "sum_forward_reward_mean.png"),
+        DatasetPackage(sum_forward_reward_stds, "Sum of forward rewards stds", "Bigger value = more variation", "cividis", "sum_forward_reward_std.png")
+    ]
 
     # Display the arrays as an image
-    plt.imshow(torch.flip(displacements, [0]), cmap='viridis', interpolation='nearest', aspect='auto', extent =[torch.min(damping).item(), torch.max(damping).item(), torch.min(stiffness).item(), torch.max(stiffness).item()])
-    cbar = plt.colorbar()
-    cbar.set_label("Bigger positive = follows commands better", rotation=270, labelpad=15)
-    plt.plot(orig_damping, orig_stiffness, 'o', markerfacecolor='none', markeredgecolor='red', label="Trained")
-    plt.xlabel("Damping (derivative gain)")
-    plt.ylabel("Stiffness (proportional gain)")
-    plt.title(f"Displacement products\nEnvs: {script_args.num_envs}; Sim / Control Freq Ratio: {env.cfg.control.desired_sim_frequency / env.cfg.control.ctrl_frequency}")
-    plt.legend()
-    # plt.show()
-    plt.savefig(f"displacement.png")
+    for dataset in datasets:
+        plt.clf()
+        plt.imshow(torch.flip(dataset.data, [0]), cmap=dataset.cmap_cmap, interpolation='nearest', aspect='auto',
+                   extent =[torch.min(damping).item(), torch.max(damping).item(), torch.min(stiffness).item(),
+                            torch.max(stiffness).item()])
+        cbar = plt.colorbar()
+        cbar.set_label(dataset.cmap_label, rotation=270, labelpad=15)
+        plt.plot(orig_damping, orig_stiffness, 'o', markerfacecolor='none', markeredgecolor='red', label="Trained")
+        plt.xlabel("Damping (derivative gain)")
+        plt.ylabel("Stiffness (proportional gain)")
+        plt.title(f"{dataset.title}\nEnvs: {script_args.num_envs}; Sim / Control Freq Ratio: {env.cfg.control.desired_sim_frequency / env.cfg.control.ctrl_frequency}")
+        plt.legend()
+        # plt.show()
+        plt.savefig(dataset.filename)
 
-    plt.clf()
-    plt.imshow(torch.flip(uprights, [0]), cmap='magma', interpolation='nearest', aspect='auto', extent =[torch.min(damping).item(), torch.max(damping).item(), torch.min(stiffness).item(), torch.max(stiffness).item()])
-    cbar = plt.colorbar()
-    cbar.set_label("1 = upright, 0 = sideways, -1 = upside-down", rotation=270, labelpad=15)
-    plt.plot(orig_damping, orig_stiffness, 'o', markerfacecolor='none', markeredgecolor='red', label="Trained")
-    plt.xlabel("Damping (derivative gain)")
-    plt.ylabel("Stiffness (proportional gain)")
-    plt.title(f"Upright products\nEnvs: {script_args.num_envs}; Sim / Control Freq Ratio: {env.cfg.control.desired_sim_frequency / env.cfg.control.ctrl_frequency}")
-    plt.legend()
-    # plt.show()
-    plt.savefig(f"upright.png")
 
     # On cpu with stiffness 0:5:50, damping 0:0.1:1, desired frequency 150:
     # 5 second episodes, 1 env: 16.3 seconds per 1%

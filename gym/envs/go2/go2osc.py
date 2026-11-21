@@ -64,6 +64,12 @@ class Go2Osc(Go2):
             device=self.device,
             dtype=torch.long,
         )
+
+        self._stride_load = torch.zeros(
+            self.num_envs, 4,
+            device=self.device,
+            dtype=torch.float
+        )
         self._update_oscillator_observations()
 
     def _reset_idx(self, reset_mask):
@@ -88,8 +94,9 @@ class Go2Osc(Go2):
 
     def _compute_grf(self, grf_norm=True):
         """Return RF, LF, RH, LH force magnitudes, optionally divided by weight."""
-        forces = self.contact_forces.index_select(1, self._oscillator_feet_indices)
-        magnitudes = torch.linalg.vector_norm(forces, dim=-1)
+        # forces = self.contact_forces.index_select(1, self._oscillator_feet_indices)
+        # magnitudes = torch.linalg.vector_norm(forces, dim=-1)
+        magnitudes = torch.abs(self.contact_forces[:, self._oscillator_feet_indices, 2])
         if not grf_norm:
             return magnitudes
         # Read applied masses here: startup randomization runs after buffer setup.
@@ -103,17 +110,27 @@ class Go2Osc(Go2):
         speed = self.commands[:, :1].abs()
         stopped = speed <= osc.stop_threshold
         moving_speed = (speed - osc.stop_threshold).clamp_min(0.0)
+        # omega = torch.where(
+        #     stopped,
+        #     osc.omega_stop,
+        #     (osc.omega_step + osc.omega_slope * moving_speed).clamp(0.0, osc.omega_max),
+        # )
         omega = torch.where(
             stopped,
             osc.omega_stop,
-            (osc.omega_step + osc.omega_slope * moving_speed).clamp(0.0, osc.omega_max),
+            (osc.omega_step + osc.omega_slope * torch.abs(speed)).clamp_min(osc.omega_max),
         )
+        # coupling = torch.where(
+        #     stopped,
+        #     osc.coupling_stop,
+        #     (osc.coupling_step + osc.coupling_slope * moving_speed).clamp(
+        #         0.0, osc.coupling_max
+        #     ),
+        # )
         coupling = torch.where(
             stopped,
             osc.coupling_stop,
-            (osc.coupling_step + osc.coupling_slope * moving_speed).clamp(
-                0.0, osc.coupling_max
-            ),
+            osc.coupling_step,
         )
         offset = stopped.to(self.oscillators.dtype) * osc.offset
         if osc.omega_var > 0:
@@ -140,6 +157,7 @@ class Go2Osc(Go2):
     def _post_physics_step(self):
         super()._post_physics_step()
         self._step_oscillators(self.dt / self.cfg.control.decimation)
+        self._update_load_stats(self.dt / self.cfg.control.decimation)
 
     def _compute_phase_velocity(self):
         feedback = (
@@ -241,3 +259,35 @@ class Go2Osc(Go2):
         )
         denominator = (self.dt * self.cfg.control.decimation) ** 2
         return -change.square().sum(dim=1) / denominator
+
+    def _reward_dof_near_home(self):
+        # From the original Go2Trot
+        return torch.sum(
+            self._sqrdexp(
+                (self.dof_pos - self.default_dof_pos) / self.scales["dof_pos_obs"]
+            ),
+            dim=1,
+        )
+
+    def _update_load_stats(self, sim_dt):
+        # This is taken from the three-legged decentralized oscillator group
+        """Per-foot load averaged over about one oscillator period (an
+        exponential moving average with time constant 1 / omega), and the
+        peak load of the current control step. Unclamped, unlike self.grf."""
+        weight = self._gravity_magnitude * self._backend.link_mass.sum(dim=1, keepdim=True)
+        load = self.contact_forces[:, self.feet_indices, 2].clamp(min=0.0) / weight
+        alpha = torch.clamp(sim_dt * self.osc_omega, max=1.0)
+        self._stride_load += alpha * (load - self._stride_load)
+        #torch.maximum(self._peak_load, load, out=self._peak_load)
+
+    def _reward_even_load(self):
+        # This reward is taken, more or less, from the three-legged decentralized oscillator group
+        """Penalize uneven load over the active legs, averaged over about a
+        stride: minus the squared coefficient of variation of each leg's
+        share (0 when even; n - 1 with all weight on one of n legs).
+        Per-stride, so gaits whose legs land at different times are not
+        penalized for it."""
+        load = self._stride_load
+        share = load / load.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        deviation = (share - 1.0 / 4)  # 4, four for legs
+        return -4 * torch.sum(deviation.square(), dim=1)

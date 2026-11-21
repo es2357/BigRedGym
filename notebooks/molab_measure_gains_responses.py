@@ -177,25 +177,29 @@ def _(REPO, mo, os):
     # Make sure this is the "Date..._" folder zipped up, with the same name
     # Or whatever folder is inside the task's log folder
     TASK = "go2trot"  # go2trot | mini_cheetah | humanoid | pendulum ...
+    EXPERIMENT_NAME = ""  # blank -> the task's default
+
+    if not EXPERIMENT_NAME.strip():
+        EXPERIMENT_NAME = TASK
 
     # Create logs folder if it doesn't exist
     if not os.path.isdir(REPO / "logs"):
         os.mkdir(REPO / "logs")
-    if not os.path.isdir(REPO / "logs" / TASK):
-        os.mkdir(REPO / "logs" / TASK)
+    if not os.path.isdir(REPO / "logs" / EXPERIMENT_NAME):
+        os.mkdir(REPO / "logs" / EXPERIMENT_NAME)
 
     file_button = mo.ui.file(kind="button", filetypes=[".zip"], multiple=False)
     mo.vstack([file_button])
 
-    return (TASK, file_button)
+    return (TASK, EXPERIMENT_NAME, file_button)
 
 
 
 @app.cell
-def _(REPO, mo, zipfile, os, io, file_button, TASK):
+def _(REPO, mo, zipfile, os, io, file_button, TASK, EXPERIMENT_NAME):
     # Unzip the file
     with zipfile.ZipFile(io.BytesIO(file_button.contents()), 'r') as zip_ref:
-        zip_ref.extractall(REPO / "logs" / TASK)
+        zip_ref.extractall(REPO / "logs" / EXPERIMENT_NAME)
 
     # Confirm that the data is in the right place
     print("Repo folder:")
@@ -203,7 +207,7 @@ def _(REPO, mo, zipfile, os, io, file_button, TASK):
     print("Logs folder:")
     print(os.listdir(REPO / "logs"))
     print("Task folder:")
-    print(os.listdir(REPO / "logs" / TASK))
+    print(os.listdir(REPO / "logs" / EXPERIMENT_NAME))
 
 
 
@@ -233,10 +237,8 @@ def _():
     MAX_KD = 5
     NUM_KP = 25
     NUM_KD = 50
-    EXPERIMENT_NAME = ""  # blank -> the task's default
     return (
         DEVICE,
-        EXPERIMENT_NAME,
         MIN_KP,
         MAX_KP,
         MIN_KD,
@@ -315,19 +317,43 @@ def _(REPO ,
         with open(REPO / filename, "rb") as file:
             return file.read()
 
-    disp_button = mo.download(
-        data=lambda: read_file("displacement.png"),
-        filename=f"displacement.png",
-        mimetype="image/png", label="Download displacement products plot"
+    disp_means_button = mo.download(
+        data=lambda: read_file("displacement_mean.png"),
+        filename=f"displacement_mean.png",
+        mimetype="image/png", label="Download displacement products means plot"
     )
 
-    upright_button = mo.download(
-        data=lambda: read_file("upright.png"),
-        filename=f"upright.png",
-        mimetype="image/png", label="Download upright products plot"
+    disp_stds_button = mo.download(
+        data=lambda: read_file("displacement_std.png"),
+        filename=f"displacement_std.png",
+        mimetype="image/png", label="Download displacement products stds plot"
     )
 
-    mo.vstack([disp_button, upright_button])
+    upright_means_button = mo.download(
+        data=lambda: read_file("upright_mean.png"),
+        filename=f"upright_mean.png",
+        mimetype="image/png", label="Download upright products means plot"
+    )
+
+    upright_stds_button = mo.download(
+        data=lambda: read_file("upright_std.png"),
+        filename=f"upright_std.png",
+        mimetype="image/png", label="Download upright products stds plot"
+    )
+
+    sum_forward_reward_means_button = mo.download(
+        data=lambda: read_file("sum_forward_reward_mean.png"),
+        filename=f"sum_forward_reward_mean.png",
+        mimetype="image/png", label="Download sum forward reward means plot"
+    )
+
+    sum_forward_reward_stds_button = mo.download(
+        data=lambda: read_file("sum_forward_reward_std.png"),
+        filename=f"sum_forward_reward_std.png",
+        mimetype="image/png", label="Download sum forward reward stds plot"
+    )
+
+    mo.vstack([disp_means_button, disp_stds_button, upright_means_button, upright_stds_button, sum_forward_reward_means_button, sum_forward_reward_stds_button])
     return
 
 

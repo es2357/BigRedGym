@@ -143,6 +143,8 @@ def play(env, runner):
             runner.actor_cfg["disable_actions"],
         )
         env.step()
+        # for n, m in runner.reward_functions.items():
+        #     print(f"{n}: {m()}")
         env.check_exit()
 
 

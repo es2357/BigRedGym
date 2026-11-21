@@ -15,7 +15,7 @@ class MiniCheetahOscCfg(MiniCheetahCfg):
     class env(MiniCheetahCfg.env):
         num_envs = 4096
         num_actuators = 12
-        episode_length_s = 10.0
+        episode_length_s = 5.0
         env_spacing = 3.0
 
     class terrain(MiniCheetahCfg.terrain):
@@ -80,18 +80,18 @@ class MiniCheetahOscCfg(MiniCheetahCfg):
         offset_range = [0.0, 0.0]
         stop_threshold = 0.5
         omega_stop = 1.0
-        omega_step = 2.0
-        omega_slope = 1.0
-        omega_max = 4.0
+        omega_step = 1.0  # 2.0
+        omega_slope = 1.0  # 1.0
+        omega_max = 4.0  # 4.0
         omega_var = 0.25
         # coupling_step = 0.
         # coupling_stop = 0.
-        coupling_stop = 4.0
-        coupling_step = 1.0
+        coupling_stop = 0.0  # 4.0
+        coupling_step = 0.0  # 1.0
         coupling_slope = 0.0
-        coupling_max = 1.0
+        coupling_max = 0.0  # 1.0
         offset = 1.0
-        coupling_var = 0.25
+        coupling_var = 0.0  # 0.25
 
         init_to = "random"
         init_w_offset = True
@@ -230,8 +230,8 @@ class MiniCheetahOscRunnerCfg(MiniCheetahRunnerCfg):
                 dof_vel = 0.0
                 min_base_height = 1.0
                 collision = 0
-                action_rate = 10  # -0.01
-                action_rate2 = 1  # -0.001
+                action_rate = 10 #-0.01
+                action_rate2 = 1  #-0.001
                 stand_still = 0.0
                 dof_pos_limits = 0.0
                 feet_contact_forces = 0.0
@@ -243,6 +243,8 @@ class MiniCheetahOscRunnerCfg(MiniCheetahRunnerCfg):
                 coupled_grf = 0.0  # 8.
                 enc_pace = 0.0
                 standing_torques = 0.0  # 1.e-5
+                any_symm_gait = 0.0  # Apparently this has always been there? Mysterious
+                pace = 0.0
 
             class termination_weight:
                 termination = 0.15
